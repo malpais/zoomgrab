@@ -5,14 +5,18 @@ zoomgrab is an OSINT tool designed to scrape employee data from zoominfo.com. Du
 [Node.js](https://nodejs.org/) is required by the Cloudflare anti-bot library. It serves to interpret Cloudflare's obfuscated JavaScript challenge. Without this, zoomgrab will not work as it will have no way of responding to Cloudflare's anti-bot challenge.
 
 Python3 packages:
+  * requests
+  * click
+  * cfscrape
+  * beautifulsoup4
 
-```
-pip install -r requirements.txt
-```
 
 ## usage
 ```
-python zoomgrab.py --help
+$ git clone https://github.com/MooseDojo/zoomgrab
+$ cd zoomgrab
+$ pip install -r requirements.txt
+$ python zoomgrab.py --help
 Usage: zoomgrab.py [OPTIONS]
 
 Options:
