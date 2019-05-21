@@ -156,7 +156,7 @@ Perform Googledork search for a company
 
 param company: Target company for search
 
-return list: A list of all search results.
+return str: A link to a Zoom employee profile page for `company`.
 """
 def search_google(company):
     search_url = 'https://www.google.com/search'
@@ -172,7 +172,44 @@ def search_google(company):
 
     # Google's result links are wrapped in "<div class='r'></div>". Grab them all
     search_result_links = [anchor for anchor in result_anchors if anchor.parent.get('class') and 'r' in anchor.parent.get('class')]
-    return search_result_links
+
+    zoom_links = []
+    pat = re.compile(r'(?P<company>.+) \| ZoomInfo.com')
+    # only get top 5 search results
+    for link in search_result_links[:5]:
+        matched = False
+        # Capture both direct employee profiles links ('/pic/') and company
+        # profiles links ('/c/'). Everything else is invalid
+        if '/c/' in link.get('href') or '/pic/' in link.get('href'):
+            # Use the `pat` regex to capture the company value in the title of the page.
+            # if there is a partial match, consider the link good, otherwise, add link to list with `matched=False`
+            result_company = pat.search(link.text).group('company')
+            if company in result_company:
+                matched = True
+            zoom_links.append({
+                'result_company': result_company,
+                'matched': matched,
+                'link': link,
+            })
+    
+    # Evaluate all non-matches and let the user choose which option matches their company
+    if not len([link for link in zoom_links if link['matched'] == True]):
+        click.secho(f'[!] failed to get an exact match on "{company}", these are the top search results:', fg='yellow')
+        for i, link in enumerate(zoom_links):
+            click.secho(f'    [!] {i + 1}: {link["result_company"]}', fg='yellow')
+        choice = click.prompt(click.style('    [!] which search result matches your company (99 to exit)', fg='yellow'),type=int)
+        if choice not in [x for x in range(1, len(zoom_links) + 1)]:
+            click.secho(f'    [!] choice {choice} is not a valid choice. exiting!', fg='yellow')
+            sys.exit(-1)
+        link = zoom_links[choice - 1]['link']
+
+        # If the link chosen is a company profile, swap out the URLs to point to
+        # employee profiles
+        if '/c/' in link.get('href'):
+            link = link.get('href').replace('/c/', '/pic/')
+    else:
+        link = zoom_links[0]['link'].get('href')
+    return link
 
 
 """
@@ -207,63 +244,54 @@ def main(company, domain, username_format, output_dir, output_format):
         os.mkdir(output_dir)
 
     click.secho(f'[+] google-dorking zoominfo.com for {company}...', fg='green')
-    result_links = search_google(company)
+    link = search_google(company)
 
-    # Any google search result that contains '/pic/' is a link to a zoom employee profile page. Grab
-    # these for processing later
-    zoom_links = []
-    for link in result_links:
-        if '/pic/' in link.get('href'):
-            zoom_links.append(link)
-    click.secho(f'    [+] fetched {len(zoom_links)} links to employee profiles from google...', fg='green')
+    # Scrape page #1 of zoom search result
+    page_scraper = PageScraper(link)
+    zoom_page = page_scraper.scrape()
+    if not zoom_page:
+        click.secho('[!] failed to retrieve initial zoom result page... exiting.', fg='red')
+        sys.exit(-1)
 
-    for link in zoom_links[:1]:
-        # Scrape page #1 of zoom search result
-        page_scraper = PageScraper(link.get('href'))
-        zoom_page = page_scraper.scrape()
-        if not zoom_page:
-            click.secho('[!] failed to retrieve initial zoom result page... exiting.', fg='red')
-            sys.exit(-1)
+    total_contacts, page_count = get_resultcount_pages(zoom_page)
+    click.secho(f'[+] found {total_contacts} records across {page_count} pages of results...', fg='green')
+    click.secho(f'[+] starting scrape of {page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
 
-        total_contacts, page_count = get_resultcount_pages(zoom_page)
-        click.secho(f'[+] found {total_contacts} records across {page_count} pages of results...', fg='green')
-        click.secho(f'    [+] starting scrape of {page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
+    # Loop through all subsequent pages for company and scrape the page data. This creates
+    # a list of scraped page content to be parsed next.
+    zoom_pages = []
+    for page in [f'{link}?pageNum={x}' for x in range(2, page_count + 1)]:
+        zoom_pages.append(page_scraper.scrape(page))
+    zoom_pages.insert(0, zoom_page)
 
-        # Loop through all subsequent pages for company and scrape the page data. This creates
-        # a list of scraped page content to be parsed next.
-        zoom_pages = []
-        for page in [f'{link.get("href")}?pageNum={x}' for x in range(2, page_count + 1)]:
-            zoom_pages.append(page_scraper.scrape(page))
-        zoom_pages.insert(0, zoom_page)
+    click.secho('[+] scraping completed, parsing people data now...', fg='green')
+    person_results = []
+    for page_content in zoom_pages:
+        for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
+            person_results.append(parse_employee_info(
+                row, username_format, domain))
 
-        click.secho('    [+] scraping completed, parsing people data now...', fg='green')
-        person_results = []
-        for page_content in zoom_pages:
-            for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
-                person_results.append(parse_employee_info(
-                    row, username_format, domain))
+    # Depending on user-input, save the data to disk
+    click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
+    if output_dir and output_format == 'flat':
+        with open(f'{output_dir}/{domain}-{username_format}.txt', 'a') as fh:
+            for person in person_results:
+                fh.write(f'{person["username"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
+    elif output_dir and output_format == 'csv':
+        with open(f'{output_dir}/{domain}-{username_format}.csv', 'a') as fh:
+            field_names = ['email', 'name', 'title', 'location']
+            writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            for person in person_results:
+                writer.writerow(person)
+    elif output_dir and output_format == 'json':
+        with open(f'{output_dir}/{domain}-{username_format}.json', 'a') as fh:
+            for person in person_results:
+                fh.write(f'{json.dumps(person)}\n')
 
-        # Depending on user-input, save the data to disk
-        click.secho('    [+] all done parsing people data, saving/printing results!', fg='green')
-        if output_dir and output_format == 'flat':
-            with open(f'{output_dir}/{domain}-{username_format}.txt', 'a') as fh:
-                for person in person_results:
-                    fh.write(f'{person["username"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
-        elif output_dir and output_format == 'csv':
-            with open(f'{output_dir}/{domain}-{username_format}.csv', 'a') as fh:
-                field_names = ['email', 'name', 'title', 'location']
-                writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-                writer.writeheader()
-                for person in person_results:
-                    writer.writerow(person)
-        elif output_dir and output_format == 'json':
-            with open(f'{output_dir}/{domain}-{username_format}.json', 'a') as fh:
-                for person in person_results:
-                    fh.write(f'{json.dumps(person)}\n')
-
-        # Print results to stdout
-        for person in person_results:
-            click.echo(f'[*] {person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}')
+    # Print results to stdout
+    for person in person_results:
+        click.echo(f'[*] {person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}')
 
 
 if __name__ == '__main__':
