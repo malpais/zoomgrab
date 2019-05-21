@@ -113,11 +113,11 @@ def parse_employee_info(row_element, email_format_string='', domain=''):
     username = ''
 
     if person_name:
-        # Split up a name into parts for parsing
+        # Split up a name into parts for parsing, trimming special characters
         # 
         # 'Joe Z. Dirt' -> ['Joe', 'Z', 'Dirt']
         # 'Mary Skinner' -> ['Mary', 'Skinner']
-        name_parts = person_name.replace('.', '').split(' ')
+        name_parts = person_name.replace('.', '').replace('\'','').split(' ')
 
         # Switch on `email_format_string` to chop up name_parts
         # based on user-defined format string. Special care given
