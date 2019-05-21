@@ -230,6 +230,45 @@ def get_resultcount_pages(page_content):
     return (zoom_total_contacts, zoom_page_count)
 
 
+"""
+Write results to a flat text file
+
+param components: a tuple of options passed from main()
+"""
+def write_results_flat(components):
+    output_dir, domain, username_format, results = components
+    with open(f'{output_dir}/{domain}-{username_format}.txt', 'a') as fh:
+        for person in results:
+            fh.write(f'{person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
+
+
+"""
+Write results to a csv
+
+param components: a tuple of options passed from main()
+"""
+def write_results_csv(components):
+    output_dir, domain, username_format, results = components
+    with open(f'{output_dir}/{domain}-{username_format}.csv', 'a') as fh:
+        field_names = ['email', 'name', 'title', 'location']
+        writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+        writer.writeheader()
+        for person in results:
+            writer.writerow(person)
+
+
+"""
+Write results as json objects to a file
+
+param components: a tuple of options passed from main()
+"""
+def write_results_json(components):
+    output_dir, domain, username_format, results = components
+    with open(f'{output_dir}/{domain}-{username_format}.json', 'a') as fh:
+        for person in results:
+            fh.write(f'{json.dumps(person)}\n')
+
+
 @click.command()
 @click.option('-c', '--company', help='The company you wish to perform OSINT on', type=str, required=True)
 @click.option('-d', '--domain', help='The domain of the targeted company', type=str, required=True)
@@ -246,7 +285,7 @@ def main(company, domain, username_format, output_dir, output_format):
     click.secho(f'[+] google-dorking zoominfo.com for {company}...', fg='green')
     link = search_google(company)
 
-    # Scrape page #1 of zoom search result
+    # Scrape first page of zoom search result
     page_scraper = PageScraper(link)
     zoom_page = page_scraper.scrape()
     if not zoom_page:
@@ -268,26 +307,17 @@ def main(company, domain, username_format, output_dir, output_format):
     person_results = []
     for page_content in zoom_pages:
         for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
-            person_results.append(parse_employee_info(
-                row, username_format, domain))
+            person_results.append(parse_employee_info(row, username_format, domain))
 
     # Depending on user-input, save the data to disk
     click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
+    output_components = (output_dir, domain, username_format, person_results)
     if output_dir and output_format == 'flat':
-        with open(f'{output_dir}/{domain}-{username_format}.txt', 'a') as fh:
-            for person in person_results:
-                fh.write(f'{person["username"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
+        write_results_flat(output_components)
     elif output_dir and output_format == 'csv':
-        with open(f'{output_dir}/{domain}-{username_format}.csv', 'a') as fh:
-            field_names = ['email', 'name', 'title', 'location']
-            writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-            writer.writeheader()
-            for person in person_results:
-                writer.writerow(person)
+        write_results_csv(output_components)
     elif output_dir and output_format == 'json':
-        with open(f'{output_dir}/{domain}-{username_format}.json', 'a') as fh:
-            for person in person_results:
-                fh.write(f'{json.dumps(person)}\n')
+        write_results_json(output_components)
 
     # Print results to stdout
     for person in person_results:
