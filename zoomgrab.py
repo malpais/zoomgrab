@@ -86,7 +86,8 @@ class PageScraper():
             url = self.url
         response = self.scraper.get(url, cookies=self.tokens, proxies=proxies, verify=False)
         if response.status_code != 200:
-            return False
+            click.secho(f'[!] failed to retrieve scrape page, received HTTP {response.status_code}... exiting.', fg='red')
+            sys.exit(-1)
         page = BeautifulSoup(response.content, 'html.parser')
         return page
 
@@ -159,12 +160,13 @@ param company: Target company for search
 return str: A link to a Zoom employee profile page for `company`.
 """
 def search_google(company):
+    click.secho(f'[+] google-dorking zoominfo.com for {company}...', fg='green')
+
     search_url = 'https://www.google.com/search'
     params = {
         'q': f'site:zoominfo.com "{company}" Employee Profiles',
     }
-    response = requests.get(search_url, params=params,
-                            headers=headers, proxies=proxies, verify=False)
+    response = requests.get(search_url, params=params, headers=headers, proxies=proxies, verify=False)
     search_results_page = BeautifulSoup(response.content, 'html.parser')
 
     # Find all links in results page
@@ -217,7 +219,7 @@ Determine result counts from Zoominfo
 
 param page_content: BeautifulSoup page object of a zoom result
 
-return tuple: Total contacts found across a count of zoom pages
+return int: Total contacts found across a count of zoom pages
 """
 def get_resultcount_pages(page_content):
     # Regex to match the counter text in the first page of results
@@ -227,7 +229,11 @@ def get_resultcount_pages(page_content):
     })
     zoom_total_contacts = zoom_total_contacts_pattern.search(total_search_pages.text).group('num_contacts')
     zoom_page_count = math.ceil(int(zoom_total_contacts) / 25)
-    return (zoom_total_contacts, zoom_page_count)
+
+    click.secho(f'[+] found {zoom_total_contacts} records across {zoom_page_count} pages of results...', fg='green')
+    click.secho(f'[+] starting scrape of {zoom_page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
+
+    return zoom_page_count
 
 
 """
@@ -282,19 +288,12 @@ def main(company, domain, username_format, output_dir, output_format):
     if output_dir and not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
-    click.secho(f'[+] google-dorking zoominfo.com for {company}...', fg='green')
     link = search_google(company)
 
     # Scrape first page of zoom search result
     page_scraper = PageScraper(link)
     zoom_page = page_scraper.scrape()
-    if not zoom_page:
-        click.secho('[!] failed to retrieve initial zoom result page... exiting.', fg='red')
-        sys.exit(-1)
-
-    total_contacts, page_count = get_resultcount_pages(zoom_page)
-    click.secho(f'[+] found {total_contacts} records across {page_count} pages of results...', fg='green')
-    click.secho(f'[+] starting scrape of {page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
+    page_count = get_resultcount_pages(zoom_page)
 
     # Loop through all subsequent pages for company and scrape the page data. This creates
     # a list of scraped page content to be parsed next.
