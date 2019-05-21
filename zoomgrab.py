@@ -240,7 +240,7 @@ def main(company, domain, username_format, output_dir, output_format):
     click.secho(banner, fg='red')
 
     # If the output directory doesn't exist then create it
-    if not os.path.exists(output_dir):
+    if output_dir and not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
     click.secho(f'[+] google-dorking zoominfo.com for {company}...', fg='green')
