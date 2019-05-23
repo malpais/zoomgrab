@@ -18,8 +18,8 @@ headers = {
 }
 
 proxies = {
-    'http': 'http://127.0.0.1:8080',
-    'https': 'http://127.0.0.1:8080',
+    # 'http': 'http://127.0.0.1:8080',
+    # 'https': 'http://127.0.0.1:8080',
 }
 
 banner = """
@@ -92,7 +92,7 @@ class ZoomScraper():
             sys.exit(-1)
         page = BeautifulSoup(response.content, 'html.parser')
         if store_pagecount:
-            self.get_pagecount(page)
+            self._get_pagecount(page)
         self.pages.append(page)
         return page
 
@@ -109,28 +109,98 @@ class ZoomScraper():
 
     return int: Total contacts found across a count of zoom pages
     """
-    def get_pagecount(self, page_content):
+    def _get_pagecount(self, page_content):
         # Regex to match the counter text in the first page of results
         zoom_total_contacts_pattern = re.compile(r'of (?P<num_contacts>\d+) Contacts')
         total_search_pages = page_content.find('h2', {
             'class': 'page_numberOfResults_header',
         })
-        zoom_total_contacts = zoom_total_contacts_pattern.search(total_search_pages.text).group('num_contacts')
+        # Matches section of page that shows number of total results
+        # "1-25 of 1,742 Contacts"
+        # Replace commas to get a number value for number of contacts
+        zoom_total_contacts = zoom_total_contacts_pattern.search(total_search_pages.text.replace(',','')).group('num_contacts')
         zoom_page_count = math.ceil(int(zoom_total_contacts) / 25)
 
         click.secho(f'[+] found {zoom_total_contacts} records across {zoom_page_count} pages of results...', fg='green')
         click.secho(f'[+] starting scrape of {zoom_page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
 
-        # return zoom_page_count
         self.page_count = zoom_page_count
 
 
+    """
+    Convert HTML into person data
+
+    param row_element: BeautifulSoup row object containing person data
+    param email_format_string: User-provided string to determine the output format of parsed username
+    param domain: User-provided string to append to converted username data
+
+    return dict: Dictionary value of parsed person data from HTML row.
+    """
+    def _parse_employee_info(self, row_element, email_format_string='', domain=''):
+        # Find relevent elements for personnel data in bs4 row object
+        name_selector = row_element.find('div', {'class': 'tableRow_personName'})
+        title_selector = row_element.find('div', {'class': 'dynamicLink'})
+        location_selector = row_element.findAll('a', {'class': 'dynamicLink'})
+
+        # Pull text values for data if available, falling back to defaults if not exists
+        person_name = name_selector.text if name_selector else None
+        person_title = title_selector.text if title_selector else ''
+        person_location = ', '.join([field.text for field in location_selector]) if location_selector else 'Unknown'
+        username = ''
+
+        if person_name:
+            # Split up a name into parts for parsing, trimming special characters
+            # 
+            # 'Joe Z. Dirt' -> ['Joe', 'Z', 'Dirt']
+            # 'Mary Skinner' -> ['Mary', 'Skinner']
+            name_parts = person_name.replace('.', '').replace('\'','').split(' ')
+
+            # Switch on `email_format_string` to chop up name_parts
+            # based on user-defined format string. Special care given
+            # to names with middle names.
+            if email_format_string == 'firstlast':
+                username = f'{name_parts[0]}{name_parts[-1]}'
+            elif email_format_string == 'firstmlast':
+                if len(name_parts) > 2:
+                    username = f'{name_parts[0]}{name_parts[1][:1]}{name_parts[-1]}'
+                else:
+                    username = f'{name_parts[0]}{name_parts[-1]}'
+            elif email_format_string == 'flast':
+                username = f'{name_parts[0][:1]}{name_parts[-1]}'
+            elif email_format_string == 'first.last':
+                username = f'{name_parts[0]}.{name_parts[-1]}'
+            elif email_format_string == 'first_last':
+                username = f'{name_parts[0]}_{name_parts[-1]}'
+            elif email_format_string == 'fmlast':
+                if len(name_parts) > 2:
+                    username = f'{name_parts[0][:1]}{name_parts[1][:1]}{name_parts[-1]}'
+                else:
+                    username = f'{name_parts[0][:1]}{name_parts[-1]}'
+            else:
+                # default to 'full'
+                username = ''.join(name_parts)
+        return {
+            'name': person_name,
+            'title': person_title,
+            'location': person_location,
+            'email': f'{username.lower()}@{domain}',
+        }
+
+
+    """
+    Iterate through scraped pages and extract employee data from the HTML
+
+    param username_format: Which format should zoomgrab format the employee email addresses, specified in cli options
+    param domain: Domain to use for the generated employee email addresses
+
+    return list: List of parsed employee data
+    """
     def get_data_from_pages(self, username_format, domain):
         click.secho('[+] scraping completed, parsing people data now...', fg='green')
         person_results = []
         for page_content in self.pages:
             for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
-                person_results.append(parse_employee_info(row, username_format, domain))
+                person_results.append(self._parse_employee_info(row, username_format, domain))
         return person_results
 
 
@@ -155,17 +225,19 @@ class OutputHandler():
         self.results = results
         self.output_format = output_format
 
+        click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
+
         if directory and output_format:
             # If the output directory doesn't exist then create it
             if directory and not os.path.exists(directory):
                 os.mkdir(directory)
 
             if output_format == 'flat':
-                self.write_flat()
+                self._write_flat()
             elif output_format == 'csv':
-                self.write_csv()
+                self._write_csv()
             elif output_format == 'json':
-                self.write_json()
+                self._write_json()
 
         # Always print results to stdout regardless of whether a user chooses to save to disk
         for person in results:
@@ -174,7 +246,7 @@ class OutputHandler():
     """
     Write results to a flat text file
     """
-    def write_flat(self):
+    def _write_flat(self):
         with open(f'{self.directory}/{self.target_domain}-{self.username_format}.txt', 'a') as fh:
             for person in self.results:
                 fh.write(f'{person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
@@ -183,7 +255,7 @@ class OutputHandler():
     """
     Write results to a csv
     """
-    def write_csv(self):
+    def _write_csv(self):
         with open(f'{self.directory}/{self.target_domain}-{self.username_format}.csv', 'a') as fh:
             field_names = ['email', 'name', 'title', 'location']
             writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
@@ -194,70 +266,10 @@ class OutputHandler():
     """
     Write results as json objects to a file
     """
-    def write_json(self):
+    def _write_json(self):
         with open(f'{self.directory}/{self.target_domain}-{self.username_format}.json', 'a') as fh:
             for person in self.results:
                 fh.write(f'{json.dumps(person)}\n')
-
-
-"""
-Convert HTML into person data
-
-param row_element: BeautifulSoup row object containing person data
-param email_format_string: User-provided string to determine the output format of parsed username
-param domain: User-provided string to append to converted username data
-
-return dict: Dictionary value of parsed person data from HTML row.
-"""
-def parse_employee_info(row_element, email_format_string='', domain=''):
-    # Find relevent elements for personnel data in bs4 row object
-    name_selector = row_element.find('div', {'class': 'tableRow_personName'})
-    title_selector = row_element.find('div', {'class': 'dynamicLink'})
-    location_selector = row_element.findAll('a', {'class': 'dynamicLink'})
-
-    # Pull text values for data if available, falling back to defaults if not exists
-    person_name = name_selector.text if name_selector else None
-    person_title = title_selector.text if title_selector else ''
-    person_location = ', '.join([field.text for field in location_selector]) if location_selector else 'Unknown'
-    username = ''
-
-    if person_name:
-        # Split up a name into parts for parsing, trimming special characters
-        # 
-        # 'Joe Z. Dirt' -> ['Joe', 'Z', 'Dirt']
-        # 'Mary Skinner' -> ['Mary', 'Skinner']
-        name_parts = person_name.replace('.', '').replace('\'','').split(' ')
-
-        # Switch on `email_format_string` to chop up name_parts
-        # based on user-defined format string. Special care given
-        # to names with middle names.
-        if email_format_string == 'firstlast':
-            username = f'{name_parts[0]}{name_parts[-1]}'
-        elif email_format_string == 'firstmlast':
-            if len(name_parts) > 2:
-                username = f'{name_parts[0]}{name_parts[1][:1]}{name_parts[-1]}'
-            else:
-                username = f'{name_parts[0]}{name_parts[-1]}'
-        elif email_format_string == 'flast':
-            username = f'{name_parts[0][:1]}{name_parts[-1]}'
-        elif email_format_string == 'first.last':
-            username = f'{name_parts[0]}.{name_parts[-1]}'
-        elif email_format_string == 'first_last':
-            username = f'{name_parts[0]}_{name_parts[-1]}'
-        elif email_format_string == 'fmlast':
-            if len(name_parts) > 2:
-                username = f'{name_parts[0][:1]}{name_parts[1][:1]}{name_parts[-1]}'
-            else:
-                username = f'{name_parts[0][:1]}{name_parts[-1]}'
-        else:
-            # default to 'full'
-            username = ''.join(name_parts)
-    return {
-        'name': person_name,
-        'title': person_title,
-        'location': person_location,
-        'email': f'{username.lower()}@{domain}',
-    }
 
 
 """
@@ -351,13 +363,16 @@ def main(target, domain, username_format, output_dir, output_format, quiet):
     # `link` to either the target URL or the result gathered from the google search
     link = target if is_valid_zoom_link(target) else search_google(target)
 
+    # Initialize ZoomScraper object for a zoominfo.com link
+    # Scrape first page and store the number of result pages to scrape
+    # Scrape additional pages
+    # Extract employee data from all scraped pages
     scraper = ZoomScraper(link)
     scraper.scrape(store_pagecount=True)
     scraper.scrape_pages()
     person_results = scraper.get_data_from_pages(username_format, domain)
 
-    # Depending on user-input, save the data to disk
-    click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
+    # Depending on user input, save the data to disk
     output_handler = OutputHandler(output_dir, domain, username_format, person_results, output_format)
 
 if __name__ == '__main__':
