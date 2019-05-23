@@ -18,8 +18,8 @@ headers = {
 }
 
 proxies = {
-    # 'http': 'http://127.0.0.1:8080',
-    # 'https': 'http://127.0.0.1:8080',
+    'http': 'http://127.0.0.1:8080',
+    'https': 'http://127.0.0.1:8080',
 }
 
 banner = """
@@ -37,7 +37,7 @@ Author: Steve Coward (steve_coward@rapid7.com)
 """
 
 """
-PageScraper - A wrapper class to use cfscrape
+ZoomScraper - A wrapper class to use cfscrape
 
 In order to mitigate cloudflare's anti-bot protection, the cfscrape
 library uses node to trick cloudflare into thinking it's a js-enabled
@@ -53,14 +53,16 @@ request should cloudflare return an HTTP 429 (throttled) error. Setting it
 too low may result in many failed requests due to the lack of time between
 requests. 10 seconds has been pretty reliable in testing.
 """
-class PageScraper():
+class ZoomScraper():
     url = ''
     scraper = None
     tokens = {}
     user_agent = ''
+    pages = []
+    page_count = 1
 
     """
-    Instantiate PageScraper
+    Instantiate ZoomScraper
 
     param: url - URL of target
     
@@ -81,7 +83,7 @@ class PageScraper():
     tokens retrieved in __init__() are re-used during scraping. Finally, parse 
     any scraped HTML with BeautifulSoup and return the bs4 object.
     """
-    def scrape(self, url=''):
+    def scrape(self, url='', store_pagecount=False):
         if not url:
             url = self.url
         response = self.scraper.get(url, cookies=self.tokens, proxies=proxies, verify=False)
@@ -89,7 +91,113 @@ class PageScraper():
             click.secho(f'[!] failed to retrieve scrape page, received HTTP {response.status_code}... exiting.', fg='red')
             sys.exit(-1)
         page = BeautifulSoup(response.content, 'html.parser')
+        if store_pagecount:
+            self.get_pagecount(page)
+        self.pages.append(page)
         return page
+
+
+    def scrape_pages(self):
+        for page in [f'{self.url}?pageNum={x}' for x in range(2, self.page_count + 1)]:
+            self.scrape(page)
+
+
+    """
+    Determine result counts from Zoominfo
+
+    param page_content: BeautifulSoup page object of a zoom result
+
+    return int: Total contacts found across a count of zoom pages
+    """
+    def get_pagecount(self, page_content):
+        # Regex to match the counter text in the first page of results
+        zoom_total_contacts_pattern = re.compile(r'of (?P<num_contacts>\d+) Contacts')
+        total_search_pages = page_content.find('h2', {
+            'class': 'page_numberOfResults_header',
+        })
+        zoom_total_contacts = zoom_total_contacts_pattern.search(total_search_pages.text).group('num_contacts')
+        zoom_page_count = math.ceil(int(zoom_total_contacts) / 25)
+
+        click.secho(f'[+] found {zoom_total_contacts} records across {zoom_page_count} pages of results...', fg='green')
+        click.secho(f'[+] starting scrape of {zoom_page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
+
+        # return zoom_page_count
+        self.page_count = zoom_page_count
+
+
+    def get_data_from_pages(self, username_format, domain):
+        click.secho('[+] scraping completed, parsing people data now...', fg='green')
+        person_results = []
+        for page_content in self.pages:
+            for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
+                person_results.append(parse_employee_info(row, username_format, domain))
+        return person_results
+
+
+"""
+OutputHandler - Consolidating any output-related functionality under a single class
+
+If the user wants to save search results to disk, zoomgrab will perform some checks
+and act appropriately if directories are missing. Depending on the user's preferred
+`output_format`, the OutputHandler object will write the results using that format.
+"""
+class OutputHandler():
+    directory = None
+    output_format = None
+    target_domain = ''
+    username_format = 'full'
+    results = []
+
+    def __init__(self, directory, target_domain, username_format, results, output_format):
+        self.directory = directory
+        self.target_domain = target_domain
+        self.username_format = username_format
+        self.results = results
+        self.output_format = output_format
+
+        if directory and output_format:
+            # If the output directory doesn't exist then create it
+            if directory and not os.path.exists(directory):
+                os.mkdir(directory)
+
+            if output_format == 'flat':
+                self.write_flat()
+            elif output_format == 'csv':
+                self.write_csv()
+            elif output_format == 'json':
+                self.write_json()
+
+        # Always print results to stdout regardless of whether a user chooses to save to disk
+        for person in results:
+            click.echo(f'[*] {person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}')
+
+    """
+    Write results to a flat text file
+    """
+    def write_flat(self):
+        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.txt', 'a') as fh:
+            for person in self.results:
+                fh.write(f'{person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
+
+
+    """
+    Write results to a csv
+    """
+    def write_csv(self):
+        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.csv', 'a') as fh:
+            field_names = ['email', 'name', 'title', 'location']
+            writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            writer.writeheader()
+            for person in self.results:
+                writer.writerow(person)
+
+    """
+    Write results as json objects to a file
+    """
+    def write_json(self):
+        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.json', 'a') as fh:
+            for person in self.results:
+                fh.write(f'{json.dumps(person)}\n')
 
 
 """
@@ -215,67 +323,6 @@ def search_google(company):
 
 
 """
-Determine result counts from Zoominfo
-
-param page_content: BeautifulSoup page object of a zoom result
-
-return int: Total contacts found across a count of zoom pages
-"""
-def get_resultcount_pages(page_content):
-    # Regex to match the counter text in the first page of results
-    zoom_total_contacts_pattern = re.compile(r'of (?P<num_contacts>\d+) Contacts')
-    total_search_pages = page_content.find('h2', {
-        'class': 'page_numberOfResults_header',
-    })
-    zoom_total_contacts = zoom_total_contacts_pattern.search(total_search_pages.text).group('num_contacts')
-    zoom_page_count = math.ceil(int(zoom_total_contacts) / 25)
-
-    click.secho(f'[+] found {zoom_total_contacts} records across {zoom_page_count} pages of results...', fg='green')
-    click.secho(f'[+] starting scrape of {zoom_page_count} pages. scraping cloudflare sites can be tricky, be patient!', fg='green')
-
-    return zoom_page_count
-
-
-"""
-Write results to a flat text file
-
-param components: a tuple of options passed from main()
-"""
-def write_results_flat(components):
-    output_dir, domain, username_format, results = components
-    with open(f'{output_dir}/{domain}-{username_format}.txt', 'a') as fh:
-        for person in results:
-            fh.write(f'{person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
-
-
-"""
-Write results to a csv
-
-param components: a tuple of options passed from main()
-"""
-def write_results_csv(components):
-    output_dir, domain, username_format, results = components
-    with open(f'{output_dir}/{domain}-{username_format}.csv', 'a') as fh:
-        field_names = ['email', 'name', 'title', 'location']
-        writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-        writer.writeheader()
-        for person in results:
-            writer.writerow(person)
-
-
-"""
-Write results as json objects to a file
-
-param components: a tuple of options passed from main()
-"""
-def write_results_json(components):
-    output_dir, domain, username_format, results = components
-    with open(f'{output_dir}/{domain}-{username_format}.json', 'a') as fh:
-        for person in results:
-            fh.write(f'{json.dumps(person)}\n')
-
-
-"""
 Determine if the value of a target matches a zoom URL or not
 
 param target: str value of user input
@@ -300,46 +347,18 @@ def main(target, domain, username_format, output_dir, output_format, quiet):
     if not quiet:
         click.secho(banner, fg='red')
 
-    # If the output directory doesn't exist then create it
-    if output_dir and not os.path.exists(output_dir):
-        os.mkdir(output_dir)
-
     # Determine if target argument is a zoom link or if it's a keyword and set
     # `link` to either the target URL or the result gathered from the google search
     link = target if is_valid_zoom_link(target) else search_google(target)
 
-    # Scrape first page of zoom search result
-    page_scraper = PageScraper(link)
-    zoom_page = page_scraper.scrape()
-    page_count = get_resultcount_pages(zoom_page)
-
-    # Loop through all subsequent pages for company and scrape the page data. This creates
-    # a list of scraped page content to be parsed next.
-    zoom_pages = []
-    for page in [f'{link}?pageNum={x}' for x in range(2, page_count + 1)]:
-        zoom_pages.append(page_scraper.scrape(page))
-    zoom_pages.insert(0, zoom_page)
-
-    click.secho('[+] scraping completed, parsing people data now...', fg='green')
-    person_results = []
-    for page_content in zoom_pages:
-        for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
-            person_results.append(parse_employee_info(row, username_format, domain))
+    scraper = ZoomScraper(link)
+    scraper.scrape(store_pagecount=True)
+    scraper.scrape_pages()
+    person_results = scraper.get_data_from_pages(username_format, domain)
 
     # Depending on user-input, save the data to disk
     click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
-    output_components = (output_dir, domain, username_format, person_results)
-    if output_dir and output_format == 'flat':
-        write_results_flat(output_components)
-    elif output_dir and output_format == 'csv':
-        write_results_csv(output_components)
-    elif output_dir and output_format == 'json':
-        write_results_json(output_components)
-
-    # Print results to stdout
-    for person in person_results:
-        click.echo(f'[*] {person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}')
-
+    output_handler = OutputHandler(output_dir, domain, username_format, person_results, output_format)
 
 if __name__ == '__main__':
     main()
