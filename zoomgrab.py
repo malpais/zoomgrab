@@ -275,20 +275,36 @@ def write_results_json(components):
             fh.write(f'{json.dumps(person)}\n')
 
 
+"""
+Determine if the value of a target matches a zoom URL or not
+
+param target: str value of user input
+
+return bool: True if target matches zoominfo regex pattern, False if not
+"""
+def is_valid_zoom_link(target):
+    link_pattern = re.compile(r'https?:\/{2,}([\w\d]+\.)?zoominfo\.com\/(c|pic)\/([\w\d-]+\/)?\d+')
+    if link_pattern.match(target):
+        return True
+    return False
+
+
 @click.command()
-@click.option('-c', '--company', help='The company you wish to perform OSINT on', type=str, required=True)
+@click.argument('target', type=str)
 @click.option('-d', '--domain', help='The domain of the targeted company', type=str, required=True)
 @click.option('-uf', '--username-format', type=click.Choice(['firstlast', 'firstmlast', 'flast', 'first.last', 'first_last', 'fmlast', 'full']), required=True)
 @click.option('-o', '--output-dir', help='Save results to path', type=click.Path())
 @click.option('-of', '--output-format', type=click.Choice(['flat', 'csv', 'json']))
-def main(company, domain, username_format, output_dir, output_format):
+def main(target, domain, username_format, output_dir, output_format):
     click.secho(banner, fg='red')
 
     # If the output directory doesn't exist then create it
     if output_dir and not os.path.exists(output_dir):
         os.mkdir(output_dir)
 
-    link = search_google(company)
+    # Determine if target argument is a zoom link or if it's a keyword and set
+    # `link` to either the target URL or the result gathered from the google search
+    link = target if is_valid_zoom_link(target) else search_google(target)
 
     # Scrape first page of zoom search result
     page_scraper = PageScraper(link)
