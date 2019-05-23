@@ -26,6 +26,7 @@ Options:
                                   [required]
   -o, --output-dir PATH           Save results to path
   -of, --output-format [flat|csv|json]
+  -q, --quiet                     Hide banner at runtime
   --help                          Show this message and exit.
 ```
 

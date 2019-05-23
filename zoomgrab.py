@@ -295,8 +295,10 @@ def is_valid_zoom_link(target):
 @click.option('-uf', '--username-format', type=click.Choice(['firstlast', 'firstmlast', 'flast', 'first.last', 'first_last', 'fmlast', 'full']), required=True)
 @click.option('-o', '--output-dir', help='Save results to path', type=click.Path())
 @click.option('-of', '--output-format', type=click.Choice(['flat', 'csv', 'json']))
-def main(target, domain, username_format, output_dir, output_format):
-    click.secho(banner, fg='red')
+@click.option('-q', '--quiet', is_flag=True, help='Hide banner at runtime')
+def main(target, domain, username_format, output_dir, output_format, quiet):
+    if not quiet:
+        click.secho(banner, fg='red')
 
     # If the output directory doesn't exist then create it
     if output_dir and not os.path.exists(output_dir):
