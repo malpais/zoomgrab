@@ -61,6 +61,7 @@ class ZoomScraper():
     pages = []
     page_count = 1
 
+
     """
     Instantiate ZoomScraper
 
@@ -72,7 +73,12 @@ class ZoomScraper():
     def __init__(self, url):
         self.url = url
         self.scraper = cfscrape.create_scraper(delay=10)
-        self.tokens, self.user_agent = cfscrape.get_tokens(url, proxies=proxies, verify=False)
+        try:
+            self.tokens, self.user_agent = cfscrape.get_tokens(url, proxies=proxies, verify=False)
+        except Exception as e:
+            click.secho(f'[!] received error attempting to scrape: {str(e)}', fg='red')
+            sys.exit(-1)
+
 
     """
     Scrape page at URL
@@ -97,8 +103,12 @@ class ZoomScraper():
         return page
 
 
+    """
+    Loops through available pages and scrapes HTML from each
+    """
     def scrape_pages(self):
         for page in [f'{self.url}?pageNum={x}' for x in range(2, self.page_count + 1)]:
+            click.secho(f'[+] scraping page {page.split("=")[-1]}/{self.page_count}', fg='green')
             self.scrape(page)
 
 

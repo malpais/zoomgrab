@@ -1,6 +1,9 @@
 # zoomgrab
 zoomgrab is an OSINT tool designed to scrape employee data from zoominfo.com. Due to Cloudflare's anti-bot protection, this tool will intelligently sleep for up to 10s if Cloudflare issues an HTTP 429 Too Many Requests response. This is a Python3 project and is not meant to be run in a 2.x environment.
 
+## Caveats
+Simply put, this script does something that Cloudflare is trying to prevent. When used sparingly, this script should work fairly well. If you hammer zoominfo.com by using this script repeatedly and in rapid succession, both Cloudflare and Zoominfo.com will throw some 5xx errors back and the script will produce inconsistent results. If you see too many errors running this script, try waiting for 5 minutes, uncomment the proxy config, load burp and rerun the script to ensure everything looks alright.
+
 ## Requirements
 [Node.js](https://nodejs.org/) is required by the Cloudflare anti-bot library. It serves to interpret Cloudflare's obfuscated JavaScript challenge. Without this, zoomgrab will not work as it will have no way of responding to Cloudflare's anti-bot challenge.
 
