@@ -18,8 +18,8 @@ headers = {
 }
 
 proxies = {
-    # 'http': 'http://127.0.0.1:8080',
-    # 'https': 'http://127.0.0.1:8080',
+    'http': 'http://127.0.0.1:8080',
+    'https': 'http://127.0.0.1:8080',
 }
 
 banner = """
@@ -58,8 +58,14 @@ class ZoomScraper():
     scraper = None
     tokens = {}
     user_agent = ''
+    domain = ''
+    username_format = 'full'
     pages = []
     page_count = 1
+    current_page = None
+    output_dir = None
+    output_format = None
+    output_handler = None
 
 
     """
@@ -70,15 +76,19 @@ class ZoomScraper():
     Initializes a cfscrape scraper object and performs an initial GET request
     to the target URL to acquire cloudflare-specific tokens for future use
     """
-    def __init__(self, url):
+    def __init__(self, url, output_dir=None, output_format=None, username_format='full', domain=''):
         self.url = url
         self.scraper = cfscrape.create_scraper(delay=10)
         try:
             self.tokens, self.user_agent = cfscrape.get_tokens(url, proxies=proxies, verify=False)
         except Exception as e:
-            click.secho(f'[!] received error attempting to scrape: {str(e)}', fg='red')
+            click.secho(f'[!] failed to retrieve scrape page, received HTTP {str(e)}... exiting.', fg='red')
             sys.exit(-1)
-
+        self.output_dir = output_dir
+        self.output_format = output_format
+        self.username_format = username_format
+        self.domain = domain
+        self.output_handler = OutputHandler(output_dir, domain, username_format, output_format)
 
     """
     Scrape page at URL
@@ -92,24 +102,30 @@ class ZoomScraper():
     def scrape(self, url='', store_pagecount=False):
         if not url:
             url = self.url
+
         response = self.scraper.get(url, cookies=self.tokens, proxies=proxies, verify=False)
         if response.status_code != 200:
             click.secho(f'[!] failed to retrieve scrape page, received HTTP {response.status_code}... exiting.', fg='red')
             sys.exit(-1)
-        page = BeautifulSoup(response.content, 'html.parser')
+        self.current_page = BeautifulSoup(response.content, 'html.parser')
         if store_pagecount:
-            self._get_pagecount(page)
-        self.pages.append(page)
-        return page
+            self._get_pagecount(self.current_page)
+            click.secho(f'[+] scraping page 1/{self.page_count}...', fg='green')
+
+        # Extract data from scraped page and save results if requested.
+        person_results = self._get_data_from_page(self.username_format, self.domain)
+        self.output_handler._save_results(person_results)
 
 
     """
-    Loops through available pages and scrapes HTML from each
+    Loops through the total number of zoom pages and scrape()-s employee data. Will print
+    results to stdout upon completion.
     """
     def scrape_pages(self):
         for page in [f'{self.url}?pageNum={x}' for x in range(2, self.page_count + 1)]:
-            click.secho(f'[+] scraping page {page.split("=")[-1]}/{self.page_count}', fg='green')
+            click.secho(f'[+] scraping page {page.split("=")[-1]}/{self.page_count}...', fg='green')
             self.scrape(page)
+        self.output_handler._print_results()
 
 
     """
@@ -190,27 +206,25 @@ class ZoomScraper():
                 # default to 'full'
                 username = ''.join(name_parts)
         return {
-            'name': person_name,
-            'title': person_title,
-            'location': person_location,
-            'email': f'{username.lower()}@{domain}',
+            'Full Name': person_name,
+            'Title': person_title,
+            'Location': person_location,
+            'Email': f'{username.lower()}@{domain}',
         }
 
 
     """
-    Iterate through scraped pages and extract employee data from the HTML
+    Iterate through a scraped page and extract employee data from the HTML
 
     param username_format: Which format should zoomgrab format the employee email addresses, specified in cli options
     param domain: Domain to use for the generated employee email addresses
 
     return list: List of parsed employee data
     """
-    def get_data_from_pages(self, username_format, domain):
-        click.secho('[+] scraping completed, parsing people data now...', fg='green')
+    def _get_data_from_page(self, username_format, domain):
         person_results = []
-        for page_content in self.pages:
-            for row in page_content.findAll('tr', {'class': 'tableRow'})[1:]:
-                person_results.append(self._parse_employee_info(row, username_format, domain))
+        for row in self.current_page.findAll('tr', {'class': 'tableRow'})[1:]:
+            person_results.append(self._parse_employee_info(row, username_format, domain))
         return person_results
 
 
@@ -222,62 +236,91 @@ and act appropriately if directories are missing. Depending on the user's prefer
 `output_format`, the OutputHandler object will write the results using that format.
 """
 class OutputHandler():
+    target_domain = ''
     directory = None
     output_format = None
-    target_domain = ''
+    output_path = ''
     username_format = 'full'
     results = []
+    all_results = []
+    csv_field_names = ['Email', 'Full Name', 'Title', 'Location']
 
-    def __init__(self, directory, target_domain, username_format, results, output_format):
+    def __init__(self, directory, target_domain, username_format, output_format):
         self.directory = directory
         self.target_domain = target_domain
         self.username_format = username_format
-        self.results = results
         self.output_format = output_format
 
-        click.secho('[+] all done parsing people data, saving/printing results!', fg='green')
-
-        if directory and output_format:
+        if self.directory and self.output_format:
             # If the output directory doesn't exist then create it
-            if directory and not os.path.exists(directory):
-                os.mkdir(directory)
+            if not os.path.exists(self.directory):
+                os.mkdir(self.directory)
 
-            if output_format == 'flat':
+            self.output_path = f'{self.directory}/{self.target_domain}-{self.username_format}'
+
+            # if the user wants to store results as a csv, write the csv header first
+            if self.output_format == 'csv':
+                self._write_csv_header()
+
+
+    """
+    Saves results to the user-specified output format
+
+    param results: list of employee profile data to be saved
+    """
+    def _save_results(self, results):
+        self.results = results
+        self.all_results += results
+        if self.directory and self.output_format:
+            if self.output_format == 'flat':
                 self._write_flat()
-            elif output_format == 'csv':
+            elif self.output_format == 'csv':
                 self._write_csv()
-            elif output_format == 'json':
+            elif self.output_format == 'json':
                 self._write_json()
 
-        # Always print results to stdout regardless of whether a user chooses to save to disk
-        for person in results:
-            click.echo(f'[*] {person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}')
+
+    """
+    Print all results to stdout
+    """
+    def _print_results(self):
+        for person in self.all_results:
+            click.echo(f'[*] {person["Email"]}|{person["Full Name"]}|{person["Title"]}|{person["Location"]}')
+
 
     """
     Write results to a flat text file
     """
     def _write_flat(self):
-        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.txt', 'a') as fh:
+        with open(f'{self.output_path}.txt', 'a') as fh:
             for person in self.results:
-                fh.write(f'{person["email"]}|{person["name"]}|{person["title"]}|{person["location"]}\n')
+                fh.write(f'{person["Email"]}|{person["Full Name"]}|{person["Title"]}|{person["Location"]}\n')
+
+
+    """
+    Write csv header to disk
+    """
+    def _write_csv_header(self):
+        with open(f'{self.output_path}.csv', 'w') as fh:
+            csv_writer = csv.DictWriter(fh, fieldnames=self.csv_field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
+            csv_writer.writeheader()
 
 
     """
     Write results to a csv
     """
     def _write_csv(self):
-        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.csv', 'a') as fh:
-            field_names = ['email', 'name', 'title', 'location']
-            writer = csv.DictWriter(fh, fieldnames=field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
-            writer.writeheader()
+        with open(f'{self.output_path}.csv', 'a') as fh:
+            csv_writer = csv.DictWriter(fh, fieldnames=self.csv_field_names, delimiter=',', quoting=csv.QUOTE_MINIMAL)
             for person in self.results:
-                writer.writerow(person)
+                csv_writer.writerow(person)
+
 
     """
     Write results as json objects to a file
     """
     def _write_json(self):
-        with open(f'{self.directory}/{self.target_domain}-{self.username_format}.json', 'a') as fh:
+        with open(f'{self.output_path}.json', 'a') as fh:
             for person in self.results:
                 fh.write(f'{json.dumps(person)}\n')
 
@@ -373,17 +416,12 @@ def main(target, domain, username_format, output_dir, output_format, quiet):
     # `link` to either the target URL or the result gathered from the google search
     link = target if is_valid_zoom_link(target) else search_google(target)
 
-    # Initialize ZoomScraper object for a zoominfo.com link
-    # Scrape first page and store the number of result pages to scrape
-    # Scrape additional pages
-    # Extract employee data from all scraped pages
-    scraper = ZoomScraper(link)
+    # Initialize ZoomScraper object for a zoominfo.com link along with user-provided options.
+    # Scrape first page and store the number of result pages to scrape.
+    # Scrape subsequent pages.
+    scraper = ZoomScraper(link, output_dir, output_format, username_format, domain)
     scraper.scrape(store_pagecount=True)
     scraper.scrape_pages()
-    person_results = scraper.get_data_from_pages(username_format, domain)
-
-    # Depending on user input, save the data to disk
-    output_handler = OutputHandler(output_dir, domain, username_format, person_results, output_format)
 
 if __name__ == '__main__':
     main()
