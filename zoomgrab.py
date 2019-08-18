@@ -351,7 +351,7 @@ def search_google(company):
     search_result_links = [anchor for anchor in result_anchors if anchor.parent.get('class') and 'r' in anchor.parent.get('class')]
 
     zoom_links = []
-    pat = re.compile(r'(?P<company>.+) \| ZoomInfo.com')
+    pat = re.compile(r'(?P<company>.+) | ZoomInfo.com')
     # only get top 5 search results
     for link in search_result_links[:5]:
         matched = False
@@ -360,14 +360,17 @@ def search_google(company):
         if '/c/' in link.get('href') or '/pic/' in link.get('href'):
             # Use the `pat` regex to capture the company value in the title of the page.
             # if there is a partial match, consider the link good, otherwise, add link to list with `matched=False`
-            result_company = pat.search(link.text).group('company')
-            if company in result_company:
-                matched = True
-            zoom_links.append({
-                'result_company': result_company,
-                'matched': matched,
-                'link': link,
-            })
+            try:
+                result_company = pat.search(link.text).group('company')
+                if company in result_company:
+                    matched = True
+                zoom_links.append({
+                    'result_company': result_company,
+                    'matched': matched,
+                    'link': link,
+                })
+            except Exception as e:
+                click.secho(f'[!] failed to find a regex match for \'company\' field', fg='yellow')
     
     # Evaluate all non-matches and let the user choose which option matches their company
     if not len([link for link in zoom_links if link['matched'] == True]):
