@@ -195,6 +195,8 @@ class ZoomScraper():
                     username = f'{name_parts[0]}{name_parts[-1]}'
             elif email_format_string == 'flast':
                 username = f'{name_parts[0][:1]}{name_parts[-1]}'
+            elif email_format_string == 'lastf':
+                username = f'{name_parts[-1]}{name_parts[0][:1]}'
             elif email_format_string == 'first.last':
                 username = f'{name_parts[0]}.{name_parts[-1]}'
             elif email_format_string == 'first_last':
@@ -409,7 +411,7 @@ def is_valid_zoom_link(target):
 @click.command()
 @click.argument('target', type=str)
 @click.option('-d', '--domain', help='The domain of the targeted company', type=str, required=True)
-@click.option('-uf', '--username-format', type=click.Choice(['firstlast', 'firstmlast', 'flast', 'first.last', 'first_last', 'fmlast', 'full']), required=True)
+@click.option('-uf', '--username-format', type=click.Choice(['firstlast', 'firstmlast', 'flast', 'first.last', 'first_last', 'fmlast', 'lastf', 'full']), required=True)
 @click.option('-o', '--output-dir', help='Save results to path', type=click.Path())
 @click.option('-of', '--output-format', type=click.Choice(['flat', 'csv', 'json']))
 @click.option('-q', '--quiet', is_flag=True, help='Hide banner at runtime')
