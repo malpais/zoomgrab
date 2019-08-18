@@ -1,4 +1,4 @@
 requests
 click
 beautifulsoup4
-cfscrape
+cfscrapegophish
