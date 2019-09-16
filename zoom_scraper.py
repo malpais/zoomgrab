@@ -117,9 +117,9 @@ class ZoomScraper():
     """
     def _get_pagecount(self, page_content):
         # Regex to match the counter text in the first page of results
-        zoom_total_contacts_pattern = re.compile(r'(?P<num_contacts>\d+) Contacts')
+        zoom_total_contacts_pattern = re.compile(r'(?P<num_contacts>\d+) results')
         total_search_pages = page_content.find('h2', {
-            'class': 'page_numberOfResults_header',
+            'class': 'page_searchResults_numberOfResults',
         })
         # Matches section of page that shows number of total results
         # "1-25 of 1,742 Contacts"
