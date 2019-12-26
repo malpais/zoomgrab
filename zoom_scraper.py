@@ -102,7 +102,12 @@ class ZoomScraper():
     def scrape_pages(self):
         for page in [f'{self.url}?pageNum={x}' for x in range(2, self.page_count + 1)]:
             click.secho(f'[+] scraping page {page.split("=")[-1]}/{self.page_count}...', fg='green')
-            self.scrape(page)
+            try:
+                self.scrape(page)
+                
+            except:
+                click.secho(f'[!] failed to scrape', fg='red')
+                 
         self.output_handler._print_results()
         if self.output_handler.gophish_api:
             self.output_handler._import_into_gophish()
